@@ -40,6 +40,44 @@ var filters = {
   between: true
 };
 
+const prepareStartKey = (startKey) => {
+  startKey._id = {S: startKey._id};
+  startKey.receiver_id = {N: startKey.receiver_id.toString()};
+  startKey.created_at = {N: startKey.created_at.toString()};
+
+  return startKey;
+};
+
+const getItems = async (query, startKey, cb) => {
+  let limit = typeof query.request.Limit !== 'undefined' ? query.request.Limit : 0;
+  query.request = query.request || {};
+
+  if (startKey) {
+    query.request.ExclusiveStartKey = startKey;
+  }
+
+  try {
+    let res = null;
+    const readable = query.exec();
+    await new Promise(resolve => {
+      readable.on('data', (data) => {
+        res = data;
+        resolve();
+      });
+    });
+
+    if (res && res.Count < limit && res.LastEvaluatedKey) {
+      query.request.Limit = limit - res.Count;
+      const getMoreItems = await getItems(query, prepareStartKey(res.LastEvaluatedKey), cb);
+      res.Items = [...res.Items, ...getMoreItems.Items];
+    }
+
+    return res;
+  } catch (err) {
+    cb(err);
+  }
+};
+
 /**
  * Sails Boilerplate Adapter
  *
@@ -158,8 +196,8 @@ module.exports = (function () {
       // Vogels adds an 's'.  So let's remove an 's'.
       var vogelsCollectionName  = collectionName[collectionName.length-1] === 's' ?
 
-                                      collectionName.slice(0, collectionName.length-1) :
-                                      collectionName;
+        collectionName.slice(0, collectionName.length-1) :
+        collectionName;
 
       var vogelsModel = Vogels.define(vogelsCollectionName, function (schema) {
 
@@ -295,22 +333,22 @@ module.exports = (function () {
       // Two helpers
       var stringEndsWith = function(str, needle) {
 
-          if (str.indexOf(needle) !== -1 &&
-              str.indexOf(needle) === str.length-needle.length) {
-              return true;
-          } else {
-              return false;
-          }
+        if (str.indexOf(needle) !== -1 &&
+          str.indexOf(needle) === str.length-needle.length) {
+          return true;
+        } else {
+          return false;
+        }
 
       }
 
       var removeSuffixFromString = function(str, suffix) {
 
-          if (stringEndsWith(str, suffix)) {
-              return str.slice(0, str.length-suffix.length);
-          } else {
-              return str;
-          }
+        if (stringEndsWith(str, suffix)) {
+          return str.slice(0, str.length-suffix.length);
+        } else {
+          return str;
+        }
 
       }
 
@@ -347,7 +385,7 @@ module.exports = (function () {
      * @return {[type]}              [description]
      */
 
-     registerConnection: function (connection, collections, cb) {
+    registerConnection: function (connection, collections, cb) {
 
       if (!connection.identity) return cb(Errors.IdentityMissing);
       if (connections[connection.identity]) return cb(Errors.IdentityDuplicate);
@@ -555,17 +593,17 @@ module.exports = (function () {
       if (options && 'where' in options && _.isObject(options.where)) {
 
         var wheres    = options.where,
-            whereExt  = this._getSubQueryWhereConditions(options),
-            indexing  = adapter._whichIndex(collectionName, ((whereExt) ? whereExt : wheres )),
-            hash      = indexing.hash,
-            range     = indexing.range,
-            indexName = indexing.index,
-            scanning  = false;
+          whereExt  = this._getSubQueryWhereConditions(options),
+          indexing  = adapter._whichIndex(collectionName, ((whereExt) ? whereExt : wheres )),
+          hash      = indexing.hash,
+          range     = indexing.range,
+          indexName = indexing.index,
+          scanning  = false;
 
         if (indexing) {
           // console.log("USING INDEX")
           // console.log(indexing);
-           query = model.query(options.where[hash])
+          query = model.query(options.where[hash])
           delete options.where[hash];
 
           if (indexName && indexName != 'primary') {
@@ -626,8 +664,8 @@ module.exports = (function () {
     /**
      * _findQuery
      * @description :: Return result if found. If not and the developer set a limit
-                       on the number of entries to return, then we must keep
-                       scanning the DB until the end is reached or until a result is returned
+     on the number of entries to return, then we must keep
+     scanning the DB until the end is reached or until a result is returned
      * @author      :: Matt McCarty (https://github.com/mattmccarty)
      * @param       :: object   adapter     - Current sails-dynamodb instance
      * @param       :: object   collection  - Collection reference
@@ -636,32 +674,14 @@ module.exports = (function () {
      * @param       :: function callback
      * @return      :: callback(err, results)
      */
-    _findQuery: function(adapter, collection, query, startKey, cb) {
-      var _self = this;
-
-      if (startKey) {
-        query.request = query.request || {};
-        query.request.ExclusiveStartKey = startKey;
+    _findQuery: async (adapter, collection, query, startKey, cb) => {
+      try {
+        const items = await getItems(query, startKey, cb);
+        adapter._valueDecode(collection.definition, items.attrs);
+        cb(null, adapter._resultFormat(items));
+      } catch (err) {
+        cb(err);
       }
-
-      query.exec(function(err, res) {
-        if (!err) {
-          // The developer requested a specific number of items, so loop over each DB entry
-          // until the end of the db table is reached or until a result is found
-          if (res && res.Count <= 0 && res.LastEvaluatedKey && res.LastEvaluatedKey.id) {
-            var lastKey = {
-              id: { S: res.LastEvaluatedKey.id },
-            }
-            return adapter._findQuery(adapter, collection, query, lastKey, cb);
-          }
-
-          adapter._valueDecode(collection.definition, res.attrs);
-          cb(null, adapter._resultFormat(res));
-        }
-        else {
-          cb(err);
-        }
-      });
     },
 
     /**
@@ -674,80 +694,80 @@ module.exports = (function () {
      * @return      :: Object filled with 'where' values or false
      */
     _getSubQueryWhereConditions: function(options) {
-        var wheresCurrent       = _.keys(options.where),
-            conditionalOperator = 'AND',
-            wheres              = [],
-            whereExt            = false,
-            count               = 0;
+      var wheresCurrent       = _.keys(options.where),
+        conditionalOperator = 'AND',
+        wheres              = [],
+        whereExt            = false,
+        count               = 0;
 
-        for (var key in wheresCurrent) {
-          var where = options.where[wheresCurrent[key]];
-          if (!_.isArray(where)) {
-            wheres.push(wheresCurrent[key]);
+      for (var key in wheresCurrent) {
+        var where = options.where[wheresCurrent[key]];
+        if (!_.isArray(where)) {
+          wheres.push(wheresCurrent[key]);
+          continue;
+        }
+
+        if (typeof wheresCurrent[key] === 'string' && wheresCurrent[key].toUpperCase() === 'OR') {
+          conditionalOperator =  'OR';
+        }
+
+        for (var arrKey in where) {
+          if (typeof where[arrKey] !== 'object') {
             continue;
           }
 
-          if (typeof wheresCurrent[key] === 'string' && wheresCurrent[key].toUpperCase() === 'OR') {
-              conditionalOperator =  'OR';
-          }
+          var subKeys = _.keys(where[arrKey]);
 
-          for (var arrKey in where) {
-            if (typeof where[arrKey] !== 'object') {
-              continue;
-            }
+          // Concat unique keys
+          wheres = _.union(wheres, subKeys);
 
-            var subKeys = _.keys(where[arrKey]);
-
-            // Concat unique keys
-            wheres = _.union(wheres, subKeys);
-
-            for (var subKey in subKeys) {
-              if (!whereExt) whereExt   = {};
-              whereExt[subKeys[subKey]] = where[arrKey][subKeys[subKey]];
-              count++;
-            }
+          for (var subKey in subKeys) {
+            if (!whereExt) whereExt   = {};
+            whereExt[subKeys[subKey]] = where[arrKey][subKeys[subKey]];
+            count++;
           }
         }
+      }
 
-        if (whereExt && count > 1) {
-            whereExt.ConditionalOperator = conditionalOperator;
-        }
+      if (whereExt && count > 1) {
+        whereExt.ConditionalOperator = conditionalOperator;
+      }
 
-        return whereExt;
+      return whereExt;
     },
 
     _applyQueryFilter: function(query, op, key, condition) {
-        try {
+      try {
 
-          if (key === 'ConditionalOperator' && query.request) {
-            query.request.ConditionalOperator = condition;
-          } else if (_.isString(condition) || _.isNumber(condition)) {
+        if (key === 'ConditionalOperator' && query.request) {
+          query.request.ConditionalOperator = condition;
+        } else if (_.isString(condition) || _.isNumber(condition)) {
 
-            query[op](key).equals(condition);
+          query[op](key).equals(condition);
 
-          } else if (_.isArray(condition)) {
-            query[op](key).in(condition);
+        } else if (_.isArray(condition)) {
+          query[op](key).in(condition);
 
-          } else if (_.isObject(condition)) {
+        } else if (_.isObject(condition)) {
 
-            var filter = _.keys(condition)[0];
+          var filter = _.keys(condition)[0];
 
-            if (filter in filters) {
-              query[op](key)[filter](filters[filter] ? condition[filter] : null);
-
-            } else {
-              throw new Error("Wrong filter given :" + filter);
-            }
+          if (filter in filters) {
+            query[op](key)[filter](filters[filter] ? condition[filter] : null);
 
           } else {
-
             throw new Error("Wrong filter given :" + filter);
           }
 
-        } catch (e) {
+        } else {
 
-          return e;
+          throw new Error("Wrong filter given :" + filter);
         }
+
+      } catch (e) {
+
+        return e;
+      }
     },
 
     // Return {index: 'name', hash: 'field1', range:'field2'}
@@ -1224,7 +1244,7 @@ module.exports = (function () {
      * @param attr    columns detail
      * @private
      */
-     _setColumnType: function (schema, name, attr, options) {
+    _setColumnType: function (schema, name, attr, options) {
 
       options = (typeof options !== 'undefined') ? options : {};
 
