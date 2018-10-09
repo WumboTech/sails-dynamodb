@@ -41,7 +41,7 @@ var filters = {
 };
 
 const prepareStartKey = (startKey) => {
-  startKey._id = {S: startKey._id};
+  startKey.id = {S: startKey.id};
   startKey.receiver_id = {N: startKey.receiver_id.toString()};
   startKey.created_at = {N: startKey.created_at.toString()};
 
